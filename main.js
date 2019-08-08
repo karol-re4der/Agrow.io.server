@@ -2,52 +2,15 @@ var app = require('express')();
 var http = require('http').Server(app);
 var io = require('socket.io')(http);
 var Victor = require('victor');
-var port = 3002;
+var fs = require('fs');
+
 var entities = [];
-//var keyevents = [];
-
-var mapSize = 1000;
-var fodderSpawnRate = 10;
-var maxFodder = 2500;
-var maxClusters = 30;
-var clusterVolume = 50;
-var clusterSize = 150;
-var consumeTreshold = 1.1;
-var digestionRate = 0.05;
-var fodderSize = 0.25;
-
+var settings;
 var connections = 0;
-var tickSpan = 33;
 
 //networking
-io.on("connection", function(socket){
-    connections++;
-    console.log("Connected: "+socket.id.toString());
-    addPlayer(socket.id.toString());
-    socket.on("disconnect", function(){
-	connections--;
-	console.log("Disconnected "+socket.id.toString());
-    });
-    socket.on("playerAction", function(playerAction){
-	processKeyInput(JSON.parse(playerAction), socket.id.toString());
-    });
-    socket.on("resize", function(data){
-	var parsedData = JSON.parse(data);
-	for(var i = 0; i<entities.length; i++){
-	    if(entities[i].type==="player"){
-		if(entities[i].id===socket.id.toString()){
-		    entities[i].canvasWidth = parsedData.canvasWidth;
-		    entities[i].canvasHeight = parsedData.canvasHeight;
-		    entities[i].apparentSize = parsedData.apparentSize;
-		}
-	    }
-	}
-    });
-});
-http.listen(port, function(){
-  console.log('listening on *:' + port);
-  console.log('server ip *:');
-});
+
+//helpers
 function sendData(){
     for(var i = 0; i<entities.length; i++){
 	if(entities[i].type==="player"){
@@ -55,8 +18,6 @@ function sendData(){
 	}
     }
 }
-
-//helpers
 function prepareData(playerId){
     var newEntities = [];
     var player;
@@ -77,13 +38,46 @@ function prepareData(playerId){
     return newEntities;
 }
 function addPlayer(playerId){
-    entities[entities.length] = {type:"player", id:playerId, size:9, posX:randInt(-mapSize, mapSize), posY:randInt(-mapSize, mapSize), vel:new Victor(0, 0), dec:0.1, acc:1, digesting:0, canvasWidth:0, canvasHeight:0, apparentSize:0};
+    var size = measurePlayers().smallest;
+    if(size<settings.startingSize){
+	size = settings.startingSize;
+    }
+    entities[entities.length] = {
+	type:"player",
+	name:"default name",
+	id:playerId,
+	size:size,
+	posX:randInt(-settings.mapSize, settings.mapSize),
+	posY:randInt(-settings.mapSize, settings.mapSize),
+	vel:new Victor(0, 0),
+	dec:settings.playerDec,
+	acc:settings.playerAcc,
+	digesting:0,
+	canvasWidth:0,
+	canvasHeight:0,
+	apparentSize:0
+    };
+}
+function measurePlayers(){
+    var smallest = 0;
+    var biggest = 0;
+    for(var i = 0; i<entities.length; i++){
+	if(entities[i].type==="player"){
+	    if(entities[i].size<smallest || smallest<=0){
+		smallest = entities[i].size;
+	    }
+	    if(entities[i].size>biggest){
+		biggest = entities[i].size;
+	    }
+	}
+    }
+    return {smallest:smallest, biggest:biggest};
 }
 function digest(){
     for(var i = 0; i<entities.length; i++){
-	if(entities[i].digesting>=digestionRate){
-	    entities[i].digesting-=digestionRate;
-	    entities[i].size+=digestionRate;
+	if(entities[i].digesting>=settings.digestionRate){
+	    entities[i].digesting-=settings.digestionRate;
+	    entities[i].size+=settings.digestionRate;
 	}
 	else if(entities[i].digesting>0){
 	    entities[i].size+=entities[i].digesting;
@@ -104,24 +98,13 @@ function spawnFodder(){
     
     
     //find player sizes
-    var smallestPlayer = 0;
-    var biggestPlayer = 0;
-    for(var i = 0; i<entities.length; i++){
-	if(entities[i].type==="player"){
-	    if(entities[i].size<smallestPlayer || smallestPlayer<=0){
-		smallestPlayer = entities[i].size;
-	    }
-	    if(entities[i].size>biggestPlayer){
-		biggestPlayer = entities[i].size;
-	    }
-	}
-    }
+    var measures = measurePlayers();
     
     //despawn fodder
     for(var i = 0; i<entities.length; i++){
 	if(entities[i].type==="cluster"){
 	    for(var ii = 0; ii<entities[i].inside.length; ii++){
-		if(entities[i].inside[ii].size<smallestPlayer*fodderSize/4){
+		if(entities[i].inside[ii].size<measures.smallest*settings.fodderSize/4){
 		    entities[i].inside.splice(ii, 1);
 		}
 	    }
@@ -132,31 +115,31 @@ function spawnFodder(){
     }
     
     //spawn clusters
-    while(clusterAmount<maxClusters){
-	var size = randInt(smallestPlayer*10, biggestPlayer*10);
-	var posX = randInt(-mapSize+size/2, mapSize-size/2);
-	var posY = randInt(-mapSize+size/2, mapSize-size/2);
-	entities[entities.length] = {type:"cluster", inside:[], posX:posX, posY:posY, size:clusterSize, vel:new Victor(0, 0), dec:0, acc:0, digesting:0};
+    while(clusterAmount<settings.maxClusters){
+	var size = randInt(measures.smallest*10, measures.biggest*10);
+	var posX = randInt(-settings.mapSize+size/2, settings.mapSize-size/2);
+	var posY = randInt(-settings.mapSize+size/2, settings.mapSize-size/2);
+	entities[entities.length] = {type:"cluster", inside:[], posX:posX, posY:posY, size:settings.clusterSize, vel:new Victor(0, 0), dec:0, acc:0, digesting:0};
 	clusterAmount++;
     }
     
     //check for fodder overflow
-    if(fodderAmount>=maxFodder){
+    if(fodderAmount>=settings.maxFodder){
 	return;
     }
     
     
     //spawn fodder
-    var toSpawn = fodderSpawnRate;
+    var toSpawn = settings.fodderSpawnRate;
     var spawned = 0;
-    if(toSpawn+fodderAmount>maxFodder){
-	toSpawn = maxFodder-fodderAmount;
+    if(toSpawn+fodderAmount>settings.maxFodder){
+	toSpawn = settings.maxFodder-fodderAmount;
     }
     for(var i = 0; i<entities.length; i++){
 	if(entities[i].type==="cluster"){
-	    while(entities[i].inside.length<clusterVolume){
+	    while(entities[i].inside.length<settings.clusterVolume){
 		
-		var size = smallestPlayer*fodderSize;
+		var size = measures.smallest*settings.fodderSize;
 		var posX = posY = 0;
 		do{
 		    posX = entities[i].posX+randInt(-entities[i].size/2+size/2, entities[i].size/2-size/2);
@@ -254,13 +237,6 @@ function moveEntities(){
 	//move
 	entities[i].posX+=entities[i].vel.x;
 	entities[i].posY-=entities[i].vel.y;
-    
-    
-	//notify
-	if(i===0){
-	    //document.title = Math.trunc(entities[i].posX)+"x "+Math.trunc(entities[i].posY)+"y "+Math.trunc(entities[i].vel.length())+"p/t s"+Math.trunc(entities[i].size);
-	}
-
     }
 }
 function randInt(max, min){
@@ -282,13 +258,13 @@ function checkCollisions(){
 				hitDistance = entities[o].size/2+entities[i].inside[ii].size/2;
 				if(hitDistance>=distance){
 				    //collide
-				    if(entities[o].size>entities[i].inside[ii].size*consumeTreshold){
+				    if(entities[o].size>entities[i].inside[ii].size*settings.consumeTreshold){
 					if(entities[o].type!=="fodder"){
 					    entities[o].digesting+=entities[i].inside[ii].size*(entities[i].inside[ii].size/entities[o].size);
 					    entities[i].inside.splice(ii, 1);
 					}
 				    }
-				    else if(entities[i].inside[ii].size>entities[o].size*consumeTreshold){
+				    else if(entities[i].inside[ii].size>entities[o].size*settings.consumeTreshold){
 					if(entities[i].inside[ii].type!=="fodder"){
 					    entities[i].inside[ii].digesting+=entities[o].size*(entities[o].size/entities[i].inside[ii].size);
 					    entities.splice(o, 1);
@@ -320,7 +296,58 @@ function tick(){
     sendData();
     refresh();
 }
+function init(){
+    //load settings
+    settings = JSON.parse(fs.readFileSync("settings.json"));
+    console.log("Settings loaded:");
+    console.log(settings);
+    
+    //setup networking
+    io.on("connection", function(socket){
+	connections++;
+	console.log("Connected: "+socket.id.toString());
+	addPlayer(socket.id.toString());
+	socket.on("disconnect", function(){
+	    connections--;
+	    console.log("Disconnected "+socket.id.toString());
+	    for(var i = 0; i<entities.length; i++){
+		if(entities[i].type==="player"){
+		    if(entities[i].id===socket.id.toString()){
+			entities[i].name = "Abandoned";
+		    }
+		}
+	    }
+	});
+	socket.on("playerAction", function(playerAction){
+	    processKeyInput(JSON.parse(playerAction), socket.id.toString());
+	});
+	socket.on("name", function(newName){
+	    for(var i = 0; i<entities.length; i++){
+		if(entities[i].type==="player"){
+		    if(entities[i].id===socket.id.toString()){
+			entities[i].name = newName;
+		    }
+		}
+	    }
+	});
+	socket.on("resize", function(data){
+	    var parsedData = JSON.parse(data);
+	    for(var i = 0; i<entities.length; i++){
+		if(entities[i].type==="player"){
+		    if(entities[i].id===socket.id.toString()){
+			entities[i].canvasWidth = parsedData.canvasWidth;
+			entities[i].canvasHeight = parsedData.canvasHeight;
+			entities[i].apparentSize = parsedData.apparentSize;
+		    }
+		}
+	    }
+	});
+    });
+    http.listen(settings.port, function(){
+	console.log('Listening on:' + settings.port);
+    });
 
+}
 function refresh(){
     if(entities.length>0){
 	digest();
@@ -330,4 +357,5 @@ function refresh(){
     }
 }
 
-setInterval(tick, tickSpan);
+init();
+setInterval(tick, settings.tickSpan);

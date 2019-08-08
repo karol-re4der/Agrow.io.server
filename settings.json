@@ -1,0 +1,18 @@
+{
+    "mapSize": 1000,
+    "fodderSpawnRate": 10,
+    "maxFodder": 2500,
+    "maxClusters": 30,
+    "clusterVolume": 50,
+    "clusterSize": 150,
+    "consumeTreshold": 1.1,
+    "digestionRate": 0.1,
+    "fodderSize": 0.25,
+    
+    "playerAcc":0.1,
+    "playerDec":0.25,
+    "startingSize":3,
+    
+    "tickSpan": 33,
+    "port": 3002
+}
